@@ -15,7 +15,7 @@ function Locker(options) {
         fs.mkdir(lockerDir, function (err) {
             if (err) return cb(err);
 
-            fs.writeFile(lockerDir + '/' + process.pid + ".pid", Date.now(), function (err) {
+            fs.writeFile(lockerDir + '/' + process.pid + ".pid", Date.now()+"", function (err) {
                 if (err) cb(err);
                 hasLock = true;
                 return cb();
@@ -25,7 +25,7 @@ function Locker(options) {
     this.lockSync = function () {
         if (hasLock) return;
         fs.mkdirSync(lockerDir);
-        fs.writeFileSync(lockerDir + '/' + process.pid + ".pid", Date.now());
+        fs.writeFileSync(lockerDir + '/' + process.pid + ".pid", Date.now()+"");
         hasLock = true;
     }
     this.unlock = function (cb) {

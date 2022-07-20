@@ -38,7 +38,7 @@ function getSnowflakeSync(options) {
     }
 
     if (lastId >= 1024) lastId = 0;
-    fs.writeFileSync(store, lastId, "utf-8");
+    fs.writeFileSync(store, lastId+"", "utf-8");
     //console.log(lastId);
     let sf = new snowflake(lastId, options.dataCenterId || 0);
     locker.unlockSync();
@@ -87,7 +87,7 @@ async function getSnowflake(options){
     }
 
     if (lastId >= 1024) lastId = 0;
-    await fs.promises.writeFile(store, lastId, "utf-8");
+    await fs.promises.writeFile(store, lastId+"", "utf-8");
     //console.log(lastId);
     let sf = new snowflake(lastId, options.dataCenterId || 0);
     await new Promise(function(resolve,reject){
