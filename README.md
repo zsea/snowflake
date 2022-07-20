@@ -3,13 +3,13 @@
 # 安装
 
 ```
-npm install --save zsnowflake
+npm install --save @zsea/snowflake
 ```
 
 # 使用
 
 ```javascript
-const zsnowflake=require("zsnowflake");
+const zsnowflake=require("@zsea/snowflake");
 const snowflake=zsnowflake.getSnowflakeSync(options);
 //或
 const snowflake=await zsnowflake.getSnowflake(options);
