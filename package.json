@@ -1,6 +1,6 @@
 {
   "name": "@zsea/snowflake",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "基于本地文件锁实现的多进程snowflake算法",
   "main": "index.js",
   "scripts": {
