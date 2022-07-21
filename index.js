@@ -86,7 +86,7 @@ async function getSnowflake(options){
         lastId = 0;
     }
 
-    if (lastId >= 1024) lastId = 0;
+    if (lastId >= 32) lastId = 0;
     await fs.promises.writeFile(store, lastId+"", "utf-8");
     //console.log(lastId);
     let sf = new snowflake(lastId, options.dataCenterId || 0);
