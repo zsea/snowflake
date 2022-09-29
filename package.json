@@ -1,15 +1,12 @@
 {
   "name": "@zsea/snowflake",
-  "version": "1.0.3",
-  "description": "基于本地文件锁实现的多进程snowflake算法",
+  "version": "2.0.0",
+  "description": "支持Cluster的Snowflake算法",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "publish": "npm publish --access=public"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "zlocker": "^1.0.2"
-  }
+  "author": "zsea",
+  "license": "ISC"
 }

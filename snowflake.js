@@ -1,187 +1,164 @@
+const cluster = require('cluster');
+
+function getValue(v, def) {
+    if (v === undefined || v === null) return def;
+    return v;
+}
+function getWorkerid(workerId, max) {
+    if (workerId !== null && workerId !== undefined) return workerId;
+    if (cluster.isWorker) {
+        workerId = cluster.worker.id % Number(max);
+    }
+    return workerId;
+}
 /**
- * 网上搜到的方案基本是按照推特的方案（10位的数据机器位分成 5位机器ID + 5位数据ID ），目前代码按照这个方案来做的；
- * 代码是参考网上的一个 Java 版本的实现方案：https://www.cnblogs.com/relucent/p/4955340.html 编写的，
- * 这个Java方案的实现是参考：https://github.com/twitter-archive/snowflake
+ * 雪花ID生成器
+ * @constructor
+ * @param {Object} options - 配置选项
+ * @param {Number} [options.timestampBits=41] - 时间位的长度，不能大于41
+ * @param {Number} [options.twepoch=1640966400000] - 时间戳的开始时间
+ * @param {Number} [options.workerIdBits=5] - 
+ * @param {Number} [options.workerId=0] - 
+ * @param {Number} [options.dataCenterIdBits=5] - 
+ * @param {Number} [options.dataCenterId=0] - 
+ * @param {Number} [options.sequenceBits=12] - 序列号位长度
+ * @param {String} [options.type="auto"] - ID类型，可选值：auto/bigint/number/string
  * 
- * 名词说明：
- * Twitter_Snowflake
- * SnowFlake的结构如下(每部分用-分开):
- * 
- * 0 - 0000000000 0000000000 0000000000 0000000000 0 - 00000 - 00000 - 000000000000 
- * A-|--------------------B--------------------------|-------C-------|------D------|
- * 
- * A区：1位标识，由于long基本类型在Java中是带符号的，最高位是符号位，正数是0，负数是1，所以id一般是正数，最高位是0
- * B区：41位时间截(毫秒级)，注意，41位时间截不是存储当前时间的时间截，而是存储时间截的差值（当前时间截 - 开始时间截)得到的值，
- *      这里的的开始时间截，一般是我们的id生成器开始使用的时间，由我们程序来指定的（如下下面程序IdWorker类的startTime属性）。41位的时间截，可以使用69年，
- *      年T = (1n << 41n) / (1000n * 60n * 60n * 24n * 365n) = 69n
- * C区：10位的数据机器位，可以部署在1024个节点，包括5位datacenterId和5位workerId（2^5 * 2^5 = 1024）
- * D区：12位序列，毫秒内的计数，12位 的计数顺序号支持每个节点每毫秒(同一机器，同一时间截)产生4096个ID序号（2^12=4096）
- * 加起来刚好64位，为一个Long型。
- * 
- * SnowFlake的优点是，整体上按照时间自增排序，并且整个分布式系统内不会产生ID碰撞(由数据ID和机器ID作区分)，并且效率较高。
- * 理论1S内生成的ID数量是 1000*4096 = 4096000（四百零九万六千个）
- * 代码中使用Bigint实现，该类型在Node10.X版本才开始支持，返回出去的结果是Bigint转为String后的字符串类型，toString方法消耗总性能的三分之一时间；
- * 性能测试结果：
- *      生成100W条ID，      约850-1000ms；  如果不toString后再转，  时间约 640-660ms
- *      生成409.6WW条ID，   约3600-3850ms； 如果不toString后再转，  时间约约 2600-2800ms
  */
+function Snowflake(options) {
 
-//==============================Constructors=====================================
+    options = options || {};
+    options.timestampBits = BigInt(getValue(options.timestampBits, 41));
+    options.twepoch = BigInt(getValue(options.twepoch, 1640966400000));
+    options.workerIdBits = BigInt(getValue(options.workerIdBits, 5));
+
+    options.dataCenterIdBits = BigInt(getValue(options.dataCenterIdBits, 5));
+
+    options.sequenceBits = BigInt(getValue(options.sequenceBits, 12));
+    options.type = options.type || "auto"; //类型：bigint/number/auto/string
+    this.sequence = 0n;
+    let length = options.timestampBits + options.workerIdBits + options.dataCenterIdBits + options.sequenceBits + 1n;
+    this.totalBits = length;
+    this.lastTimestamp = 0n;
+    let maxValues = {
+        timestamp: -1n ^ (-1n << options.timestampBits),
+        workerId: -1n ^ (-1n << options.workerIdBits),
+        dataCenterId: -1n ^ (-1n << options.dataCenterIdBits),
+        sequence: -1n ^ (-1n << options.sequenceBits),
+    }
+    options.workerId = BigInt(getWorkerid(options.workerId, maxValues.workerId) || 0);
+    options.dataCenterId = BigInt(options.dataCenterId || process.env["SNOWFLAKE_DATACENTER_ID"] || 0);
+    this.maxValues = maxValues;
+    this.options = options;
+}
 /**
- * 构造函数
- * @param workerId 工作ID (0~31)
- * @param datacenterId 数据标识ID (0~31)
+ * 生成一个ID
+ * @returns {Number|bigint} 生成的ID
  */
+Snowflake.prototype.nextId = function () {
+    let options = this.options;
+    let seq = 0n;
+    let timestamp = BigInt(Date.now()) - options.twepoch;
+    if (options.timestampBits < 41n) {
+        // 如果时间长度大于最大时间长度，则移除多余位数
+        let bits = 41n - options.timestampBits;
+        timestamp = timestamp >> bits;
+    }
+    if (timestamp < this.lastTimestamp) {
+        // 如果遇到时钟回拨，则使用最后一次的时间
+        timestamp = this.lastTimestamp;
+    }
+    if (timestamp === this.lastTimestamp) {
+        // 如果与最后缓存时间相同，则在上一次的序列号上加1
+        seq = this.sequence + 1n;
+    }
+    if (seq > this.maxValues.sequence) {
+        // 如果序列号超过了最大值，则向后借1个时间（根据时间长度来判断，不是1秒，也不是1毫秒），序列号值设0
+        timestamp = timestamp + 1n;
+        seq = 0n;
+    }
+    let id = 0n;
 
- var Snowflake = (function () {
-    function Snowflake(_workerId, _dataCenterId) {
-        /** 开始时间截 ：2019-12-20 13:52:35 */
-        this.twepoch = 1576821155667n;
-
-        /** 机器id所占的位数 */
-        this.workerIdBits = 5n;
-
-        /** 数据标识id所占的位数 */
-        this.dataCenterIdBits = 5n;
-
-        /** 
-         * 支持的最大机器id，结果是31 (这个移位算法可以很快的计算出几位二进制数所能表示的最大十进制数) 
-         * 用位运算计算n个bit能表示的最大数值，计算是 -1 左移 5，得结果a，然后 -1 异或 a
-         * 
-         * 步骤
-         * 先 -1 左移 5，得结果a ：
-                  11111111 11111111 11111111 11111111 //-1的二进制表示（补码，补码的意义是拿补码和原码相加，最终加出一个“溢出的0”）
-            11111 11111111 11111111 11111111 11100000 //高位溢出的不要，低位补0
-                  11111111 11111111 11111111 11100000 //结果a
-        * 再 -1 异或 a ：
-                  11111111 11111111 11111111 11111111 //-1的二进制表示（补码）
-              ^   11111111 11111111 11111111 11100000 //两个操作数的位中，相同则为0，不同则为1
-          ---------------------------------------------------------------------------
-                  00000000 00000000 00000000 00011111 //最终结果31
-         * */
-        this.maxWrokerId = -1n ^ (-1n << this.workerIdBits); // 值为：31
-
-        /** 支持的最大数据标识id，结果是31 */
-        this.maxDataCenterId = -1n ^ (-1n << this.dataCenterIdBits); // 值为：31
-
-        /** 序列在id中占的位数 */
-        this.sequenceBits = 12n;
-
-        /** 机器ID向左移12位 */
-        this.workerIdShift = this.sequenceBits; // 值为：12
-
-        /** 数据标识id向左移17位(12序列id+5机器ID) */
-        this.dataCenterIdShift = this.sequenceBits + this.workerIdBits; // 值为：17
-
-        /** 时间截向左移22位( 12序列id + 5机器ID + 5数据ID) */
-        this.timestampLeftShift = this.sequenceBits + this.workerIdBits + this.dataCenterIdBits; // 值为：22
-
-        /** 生成序列的掩码，这里为4095
-         * 用位运算计算n个bit能表示的最大数值，计算是 -1 左移 12，得结果a，然后 -1 异或 a
-         * 
-         * 步骤
-         * 先 -1 左移 12，得结果a ：
-                  11111111 11111111 11111111 11111111 //-1的二进制表示（补码，补码的意义是拿补码和原码相加，最终加出一个“溢出的0”）
-    1111 11111111 11111111 11111111 11110000 00000000 //高位溢出的不要，低位补0
-                  11111111 11111111 11110000 00000000 //结果a
-        * 再 -1 异或 a ：
-                  11111111 11111111 11111111 11111111 //-1的二进制表示（补码）
-              ^   11111111 11111111 11110000 00000000 //两个操作数的位中，相同则为0，不同则为1
-          ---------------------------------------------------------------------------
-                  00000000 00000000 00001111 11111111 //最终结果2^12  = 4096
-        */
-        this.sequenceMask = -1n ^ (-1n << this.sequenceBits); // 值为：4095
-
-        /** 工作机器ID(0~31) */
-        // this.workerId = 0n
-        /** 数据中心ID(0~31) */
-        // this.dataCenterId = 0n
-
-        /** 上次生成ID的时间截 */
-        this.lastTimestamp = -1n;
-
-        this.workerId = BigInt(_workerId || 0n);         //工作机器ID(0~31)
-        this.dataCenterId = BigInt(_dataCenterId || 0n); //数据标识ID(0~31)
-        this.sequence = 0n;                              //毫秒内序列(0~4095)
-
-        // workerId 校验
-        if (this.workerId > this.maxWrokerId || this.workerId < 0) {
-            throw new Error(`workerId must max than 0 and small than maxWrokerId ${this.maxWrokerId}`);
-        }
-        // dataCenterId 校验
-        if (this.dataCenterId > this.maxDataCenterId || this.dataCenterId < 0) {
-            throw new Error(`dataCenterId must max than 0 and small than maxDataCenterId ${this.maxDataCenterId}`);
+    if (options.timestampBits > 0) {
+        id = id | timestamp;
+    }
+    if (options.dataCenterIdBits > 0) {
+        id = (id << options.dataCenterIdBits) | options.dataCenterId;
+    }
+    if (options.workerIdBits) {
+        id = (id << options.workerIdBits) | options.workerId;
+    }
+    if (options.sequenceBits) {
+        id = (id << options.sequenceBits) | seq;
+    }
+    this.lastTimestamp = timestamp;
+    this.sequence = seq;
+    if (options.type === "number") {
+        id = Number(id)
+    }
+    else if (options.type === "auto") {
+        //console.log("=======",this.totalBits)
+        if (this.totalBits <= 54n) {
+            id = Number(id);
         }
     }
-    // ==============================Methods==========================================
-    /**
-     * 获得下一个ID (该方法是线程安全的)
-     * @return SnowflakeId
-     */
-    Snowflake.prototype.nextId = function () {
-        var timestamp = this.timeGen();
+    if (options.type === "string") {
+        id = id.toString();
+    }
+    return id;
+}
+/**
+ * 解析ID，用于查看生成的时间、dataCenterId、workerId、序列号等
+ * @param {String|Number|bigint} id - ID
+ * @returns [Object]
+ */
+Snowflake.prototype.parse = function (id) {
+    id = BigInt(id);
+    //console.log(this)
+    let timestamp = 0n
+        , seq = 0n
+        , workerId = 0n
+        , dataCenterId = 0n
+        ;
+    //timestamp = Date(Number(timestamp))
+    if (this.options.dataCenterIdBits > 0n) {
+        dataCenterId = id << (this.options.timestampBits + 1n) >> (64n - this.options.dataCenterIdBits - 1n);
+    }
 
-        //如果当前时间小于上一次ID生成的时间戳，说明系统时钟回退过这个时候应当抛出异常
-        if (timestamp < this.lastTimestamp) {
-            throw new Error('Clock moved backwards. Refusing to generate id for ' +
-                (this.lastTimestamp - timestamp));
+    if (this.options.sequenceBits > 0) {
+        seq = id & this.maxValues.sequence;
+    }
+    if (this.options.workerIdBits > 0) {
+        workerId = (id >> this.options.sequenceBits) & this.maxValues.workerId;
+    }
+    if (this.options.dataCenterIdBits > 0) {
+        dataCenterId = (id >> (this.options.sequenceBits + this.options.workerIdBits)) & this.maxValues.dataCenterId;
+    }
+    if (this.options.timestampBits > 0) {
+        timestamp = (id >> (this.options.sequenceBits + this.options.workerIdBits + this.options.dataCenterIdBits)) & this.maxValues.timestamp;
+        if (this.options.timestampBits < 41n) {
+            timestamp = timestamp << (41n - this.options.timestampBits);
         }
-
-        //如果是同一时间生成的，则进行毫秒内序列
-        if (this.lastTimestamp === timestamp) {
-            /**
-             * 按位于操作 对于每一个比特位，只有两个操作数相应的比特位都是1时，结果才为1，否则为0。
-             * 假设最开始 this.sequence 为 0n 加1后，则为1
-             * 结果如下
-                00000000 00000000 00000000 00000001 //1的二进制
-                00000000 00000000 00001111 11111111 //最终结果2^12  = 4096
-          ---------------------------------------------------------------------------
-                00000000 00000000 00000000 00000001 //结果1的二进制
-             */
-            this.sequence = (this.sequence + 1n) & this.sequenceMask;
-            //毫秒内序列溢出
-            if (this.sequence === 0n) {
-                //阻塞到下一个毫秒,获得新的时间戳
-                timestamp = this.tilNextMillis(this.lastTimestamp);
-            }
-        } else {
-            //时间戳改变，毫秒内序列重置
-            this.sequence = 0n;
-        }
-
-        //上次生成ID的时间截
-        this.lastTimestamp = timestamp;
-
-        //移位并通过或运算拼到一起组成64位的ID
-        let result = ((timestamp - this.twepoch) << this.timestampLeftShift) |
-            (this.dataCenterId << this.dataCenterIdShift) |
-            (this.workerId << this.workerIdShift) |
-            this.sequence
-        return result;
+        timestamp = timestamp + this.options.twepoch;
+    }
+    return {
+        timestamp: new Date(Number(timestamp)),
+        dataCenterId: Number(dataCenterId),
+        sequence: Number(seq),
+        workerId: Number(workerId)
     };
 
-    /**
-     * 阻塞到下一个毫秒，直到获得新的时间戳
-     * @param lastTimestamp 上次生成ID的时间截
-     * @return 当前时间戳
-     */
-    Snowflake.prototype.tilNextMillis = function (lastTimestamp) {
-        var timestamp = this.timeGen();
-        while (timestamp <= lastTimestamp) {
-            timestamp = this.timeGen();
-        }
-        return timestamp;
-    };
-
-    /**
-     * 返回以毫秒为单位的当前时间
-     * @return 当前时间(毫秒)
-     */
-    Snowflake.prototype.timeGen = function () {
-        return BigInt(Date.now());
-    };
-
-    return Snowflake;
-}());
-// console.log(new Snowflake(1n, 1n).nextId());
-module.exports = Snowflake
+}
+/**
+ * 使用默认配置创建一个54位的Id生成器
+ * @returns [Snowflake]
+ */
+Snowflake.Short=function(){
+    return new Snowflake({
+        dataCenterIdBits:3,
+        workerIdBits:3,
+        sequenceBits:6,
+        type:"number"
+    })
+}
+module.exports=Snowflake;
