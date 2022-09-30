@@ -38,7 +38,7 @@ snowflake.nextId();
 |options.type|enum|auto|生成ID的类型，可选值：auto/string/bigint/number|
 
 说明：
-* 所有参数均为未选参数。
+* 所有参数均为可选参数。
 * dataCenterId - 该参数首先通过用户传入，若不传入，可以通过环境变量```SNOWFLAKE_DATACENTER_ID```读取，若环境变量也未配置，再取默认值。
 * workerId - 该参数首先通过用户传入，若不传入，则判断是否是```worker```模式下，若是```worker```模式，则读取```worker.id```，若不是，则取默认值。
 
